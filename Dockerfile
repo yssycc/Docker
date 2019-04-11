@@ -1,8 +1,7 @@
 FROM yyxjcc/java:8u202
+LABEL Maintainer="yyxjcc <yyxjcc@gmail.com>"
 
-LABEL Maintainer=yyxjcc
-
-ENV CATALINA_HOME /usr/local/tomcat
+ENV CATALINA_HOME /opt/tomcat
 ENV PATH $CATALINA_HOME/bin:$PATH
 RUN mkdir -p "$CATALINA_HOME"
 WORKDIR $CATALINA_HOME
@@ -20,27 +19,28 @@ ENV TOMCAT_VERSION 9.0.17
 ENV TOMCAT_SHA512 f3427b7c5065a4f52af7bc00224afaae73226bf5def84b45aa305e18200a28e19463dd85a13f4ab1eb739366249cf1e99461014248f1f00b0c97f2afcef896a0
 
 ENV TOMCAT_TGZ_URLS \
-# https://issues.apache.org/jira/browse/INFRA-8753?focusedCommentId=14735394#comment-14735394
+	# https://issues.apache.org/jira/browse/INFRA-8753?focusedCommentId=14735394#comment-14735394
 	https://www.apache.org/dyn/closer.cgi?action=download&filename=tomcat/tomcat-$TOMCAT_MAJOR/v$TOMCAT_VERSION/bin/apache-tomcat-$TOMCAT_VERSION.tar.gz \
-# if the version is outdated, we might have to pull from the dist/archive :/
+	# if the version is outdated, we might have to pull from the dist/archive :/
 	https://www-us.apache.org/dist/tomcat/tomcat-$TOMCAT_MAJOR/v$TOMCAT_VERSION/bin/apache-tomcat-$TOMCAT_VERSION.tar.gz \
 	https://www.apache.org/dist/tomcat/tomcat-$TOMCAT_MAJOR/v$TOMCAT_VERSION/bin/apache-tomcat-$TOMCAT_VERSION.tar.gz \
 	https://archive.apache.org/dist/tomcat/tomcat-$TOMCAT_MAJOR/v$TOMCAT_VERSION/bin/apache-tomcat-$TOMCAT_VERSION.tar.gz
 
 ENV TOMCAT_ASC_URLS \
 	https://www.apache.org/dyn/closer.cgi?action=download&filename=tomcat/tomcat-$TOMCAT_MAJOR/v$TOMCAT_VERSION/bin/apache-tomcat-$TOMCAT_VERSION.tar.gz.asc \
-# not all the mirrors actually carry the .asc files :'(
+	# not all the mirrors actually carry the .asc files :'(
 	https://www-us.apache.org/dist/tomcat/tomcat-$TOMCAT_MAJOR/v$TOMCAT_VERSION/bin/apache-tomcat-$TOMCAT_VERSION.tar.gz.asc \
 	https://www.apache.org/dist/tomcat/tomcat-$TOMCAT_MAJOR/v$TOMCAT_VERSION/bin/apache-tomcat-$TOMCAT_VERSION.tar.gz.asc \
 	https://archive.apache.org/dist/tomcat/tomcat-$TOMCAT_MAJOR/v$TOMCAT_VERSION/bin/apache-tomcat-$TOMCAT_VERSION.tar.gz.asc
 
 RUN set -eux; \
 	\
+	apk update; \ 
 	apk add --no-cache --virtual .fetch-deps \
-		gnupg \
-		\
-		ca-certificates \
-		openssl \
+			gnupg \
+			\
+			ca-certificates \
+			openssl \
 	; \
 	\
 	export GNUPGHOME="$(mktemp -d)"; \
@@ -78,48 +78,42 @@ RUN set -eux; \
 	nativeBuildDir="$(mktemp -d)"; \
 	tar -xvf bin/tomcat-native.tar.gz -C "$nativeBuildDir" --strip-components=1; \
 	apk add --no-cache --virtual .native-build-deps \
-		apr-dev \
-		coreutils \
-		dpkg-dev dpkg \
-		gcc \
-		libc-dev \
-		make \
-		"openjdk${JAVA_VERSION%%[-~bu]*}"="$JAVA_ALPINE_VERSION" \
-		openssl-dev \
-	; \
+			apr-dev \
+			gcc \
+			libc-dev \
+			make \
+			openssl-dev \
+	; \ 
 	( \
-		export CATALINA_HOME="$PWD"; \
-		cd "$nativeBuildDir/native"; \
-		gnuArch="$(dpkg-architecture --query DEB_BUILD_GNU_TYPE)"; \
-		./configure \
-			--build="$gnuArch" \
-			--libdir="$TOMCAT_NATIVE_LIBDIR" \
-			--prefix="$CATALINA_HOME" \
-			--with-apr="$(which apr-1-config)" \
-			--with-java-home="$(docker-java-home)" \
-			--with-ssl=yes; \
-		make -j "$(nproc)"; \
-		make install; \
+		export CATALINA_HOME="$PWD" \
+		&& cd "$nativeBuildDir/native" \
+		&& ./configure \
+				--libdir="$TOMCAT_NATIVE_LIBDIR" \
+				--prefix="$CATALINA_HOME" \
+				--with-apr="$(which apr-1-config)" \
+				--with-java-home="$JAVA_HOME" \
+				--with-ssl=yes \
+		&& make -j$(getconf _NPROCESSORS_ONLN) \
+		&& make install \
 	); \
-	rm -rf "$nativeBuildDir"; \
-	rm bin/tomcat-native.tar.gz; \
-	\
 	runDeps="$( \
-		scanelf --needed --nobanner --format '%n#p' --recursive "$TOMCAT_NATIVE_LIBDIR" \
-			| tr ',' '\n' \
-			| sort -u \
-			| awk 'system("[ -e /usr/local/lib/" $1 " ]") == 0 { next } { print "so:" $1 }' \
+	scanelf --needed --nobanner --format '%n#p' --recursive "$TOMCAT_NATIVE_LIBDIR" \
+	| tr ',' '\n' \
+	| sort -u \
+	| awk 'system("[ -e /usr/local/lib/" $1 " ]") == 0 { next } { print "so:" $1 }' \
 	)"; \
 	apk add --virtual .tomcat-native-rundeps $runDeps; \
 	apk del .fetch-deps .native-build-deps; \
+	rm -rf "$nativeBuildDir"; \
+	rm bin/tomcat-native.tar.gz; \ 
 	\
-# sh removes env vars it doesn't support (ones with periods)
-# https://github.com/docker-library/tomcat/issues/77
+	# sh removes env vars it doesn't support (ones with periods)
+	# https://github.com/docker-library/tomcat/issues/77
 	apk add --no-cache bash; \
 	find ./bin/ -name '*.sh' -exec sed -ri 's|^#!/bin/sh$|#!/usr/bin/env bash|' '{}' +; \
 	\
-# fix permissions (especially for running as non-root)
-# https://github.com/docker-library/tomcat/issues/35
+	# fix permissions (especially for running as non-root)
+	# https://github.com/docker-library/tomcat/issues/35
 	chmod -R +rX .; \
 	chmod 777 logs work
 
@@ -129,9 +123,27 @@ RUN set -e \
 	&& nativeLines="$(echo "$nativeLines" | grep 'Apache Tomcat Native')" \
 	&& nativeLines="$(echo "$nativeLines" | sort -u)" \
 	&& if ! echo "$nativeLines" | grep 'INFO: Loaded APR based Apache Tomcat Native library' >&2; then \
-		echo >&2 "$nativeLines"; \
-		exit 1; \
+	echo >&2 "$nativeLines"; \ 
+	exit 1; \
 	fi
 
+# delete log and webapps dir
+RUN set -e \
+	&& rm -rf ${CATALINA_HOME}/logs \ 
+	&& rm -rf ${CATALINA_HOME}/webapps
+
+# fix 403 ERROR when upload file through nginx to tomcat
+RUN sed -ie 's/UMASK="0027"/UMASK="0022"/g' bin/catalina.sh \ 
+	# add tomcat startup parameters
+	&& sed -i '111i JAVA_OPTS="-server -Xms512m -Xmx512m -Xmn64m -XX:MetaspaceSize=256M -XX:MaxMetaspaceSize=256M -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=$CATALINA_HOME/logs/heap.dump -XX:+UseConcMarkSweepGC -XX:+CMSClassUnloadingEnabled -XX:+PrintGC -XX:+PrintGCDetails -XX:+PrintGCTimeStamps -XX:+PrintGCDateStamps -Xloggc:$CATALINA_HOME/logs/gc.log -XX:CMSInitiatingOccupancyFraction=75 -XX:+UseCMSInitiatingOccupancyOnly"' bin/catalina.sh \ 
+	# add tomcat executor thread pool
+	&& sed -i '60i <Executor name="tomcatThreadPool" namePrefix="catalina-exec-" maxThreads="1000" minSpareThreads="100" maxIdleTime="60000"/>' conf/server.xml \ 
+	# change tomcat startup mode 'nio' to 'apr'
+	&& sed -ie 's/<Connector port="8080"/<!--<Connector port="8080"/g' conf/server.xml \ 
+	&& sed -ie 's/redirectPort="8443" \/>/redirectPort="8443" \/>-->/g' conf/server.xml \ 
+	&& sed -i '73i <Connector port="8080" executor="tomcatThreadPool" protocol="org.apache.coyote.http11.Http11AprProtocol" connectionTimeout="20000" redirectPort="8443" acceptCount="1000" URIEncoding="UTF-8" maxHttpHeaderSize="8192" disableUploadTimeout="true" enableLookups="false"/>' conf/server.xml	
+
+VOLUME ["${CATALINA_HOME}/logs", "${CATALINA_HOME}/webapps"]
+
 EXPOSE 8080
-CMD ["catalina.sh", "run"]
+CMD ["bin/catalina.sh","run"]
