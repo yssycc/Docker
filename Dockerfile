@@ -1,4 +1,7 @@
 FROM yyxjcc/java:8u202
+
+# based on zzjhacn's work
+LABEL maintainer="zzjhacn"
 LABEL Maintainer="yyxjcc <yyxjcc@gmail.com>"
 
 ENV CATALINA_HOME /opt/tomcat
