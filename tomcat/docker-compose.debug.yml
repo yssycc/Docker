@@ -1,0 +1,10 @@
+version: '2.1'
+
+services:
+  dockerworkspace:
+    image: dockerworkspace
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - :
